@@ -68,7 +68,7 @@ void MPIDataProcessor::singleExecution()
   int col;
   int index;
 
-// uzupełnienie marginesów 1.00
+  // uzupełnienie marginesów 1.00
   for (int i = 0; i < margin; i++)
   {
     for (int j = 0; j < dataSize; j++)
