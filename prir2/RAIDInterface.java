@@ -43,7 +43,7 @@ public interface RAIDInterface {
 	 * @param sector sektor dysku logicznego, do ktorego ma nastapic zapis
 	 * @param value  wartosc do zapisu
 	 */
-	public void write(int sector, int value) throws DiskInterface.DiskError;
+	public void write(int sector, int value);
 
 	/**
 	 * Zlecenie odczytu z sektora sector dysku logicznego

@@ -1,0 +1,243 @@
+import java.util.ArrayList;
+import java.util.Arrays;
+
+public class RAID implements RAIDInterface {
+    int matrixState = 0;
+    int degradedDiscIdx = -1;
+    int diskSize;
+    boolean shutdown = false;
+    private ArrayList<DiskInterface> disks = new ArrayList<>();
+    private int[] oldVals;
+    private int[] newVals;
+    volatile int globalChangedDiskIdx = -1;
+    volatile int globalChangedSectorKOldVal = 0;
+
+    @Override
+    public RAIDState getState() {
+        if (matrixState == 0){ return RAIDState.UNKNOWN; }
+        else if (matrixState == 1){ return RAIDState.INITIALIZATION; }
+        else if (matrixState == 2){ return RAIDState.NORMAL; }
+        else if (matrixState == 3){ return RAIDState.DEGRADED; }
+        else { return RAIDState.REBUILD; } //matrixState == 4
+    }
+
+    @Override
+    public void addDisk(DiskInterface disk) {
+        if (disks.isEmpty()){
+            diskSize = disk.size();
+        }
+        disks.add(disk);
+    }
+
+    @Override
+    public void startRAID() {
+        if(!disks.isEmpty()){
+            matrixState = 1;
+            initialization();
+        }
+    }
+
+    private void initialization() {
+        System.out.println("initializing");
+
+        for (int sectorK = 0; sectorK < diskSize; sectorK++){
+            update_sum_k(sectorK, -1, 0, 0, -1);
+        }
+
+        for (int val : disks.get(disks.size()-1).getSectors() ) {
+            System.out.print(val + "; ");
+        }
+        System.out.println();
+
+        oldVals = new int[size() + diskSize];
+        Arrays.fill(oldVals, -1);
+        newVals = new int[size() + diskSize];
+        Arrays.fill(newVals, -1);
+
+        matrixState = 2; //NORMAL
+    }
+
+    private void update_sum_k(int k, int changedDiskIdx, int degradedDiscSectorKVal, int newVal) {
+      int sumK = 0;
+      for(int diskIdx = 0; diskIdx < disks.sie() - 1; diskIdx++){
+        int nextVal = 0;
+        if (diskIdx == degradedDiscIdx){
+          nextVal = degradedDiscSectorKVal;
+        } else if (diskIdx == changedDiskIdx){
+          nextVal = newVal;
+        } else {
+          sumK += read((diskIdx*discSize) + k);
+        }
+      }
+      
+      // wyzerowanie tymczasowych starych i nowych wartości po zakończeniu zapisania nowej sumy (dane nieaktualne)
+      for(int diskIdx = 0; diskIdx < disks.sie() - 1; diskIdx++){
+        oldVals[(diskIdx*discSize) + k] = -1;
+        newVals[(diskIdx*discSize) + k] = -1;
+      }
+
+      write(((disks.size() - 1)*diskSize) + k, sumK);
+      
+      for (int val : disks.get((disks.size() - 1)).getSectors() ) {
+          System.out.print(val + "; ");
+      }
+      System.out.println();
+    }
+
+    // func. wywolywana tylko dla dyskow popsutych innych niz ostatni kontrolny
+    private int findValueOfSectorKOfDegradedDisk(int k) {
+
+      // jeśli to nowa wartość zapisana w innym wątku i jeszcze nie mamy do niej dostępu
+      if (newVals[(degradedDiscIdx*diskSize) + k] != -1){
+        return newVals[(degradedDiscIdx*diskSize) + k]
+      }
+
+      int degradedDiscValSectorK = read(((disks.size() - 1)*diskSize) + k); //odczytanie sumy
+      for(int diskIdx = 0; diskIdx < disks.sie() - 1; diskIdx++){
+        int validDiskSectorKVal = 0;
+        if (diskIdx != degradedDiscIdx && oldVals[(diskIdx*discSize) + k] == -1){
+          validDiskSectorKVal = read((diskIdx*discSize) + k)
+        } else if (oldVals[(diskIdx*discSize) + k] == -1) {
+          validDiskSectorKVal = oldVals[(diskIdx*discSize) + k];
+        }
+        degradedDiscValSectorK -= validDiskSectorKVal;
+      }
+
+      return degradedDiscValSectorK;
+    }
+
+    @Override
+    public void replaceDisk(DiskInterface disk) {
+        System.out.println("replace disk degrIdx: " + degradedDiscIdx);
+        disks.set(degradedDiscIdx, disk);
+        matrixState = 4; // rebuild
+        reconstructNewDisk();
+    }
+
+    private void reconstructNewDisk() {
+        for (int sectorK = 0; sectorK < diskSize; sectorK++) {
+          // jesli to nie jest dysk koncowy
+            if(degradedDiscIdx < disks.size() - 1){
+                int degradedDiscSectorKVal = findValueOfSectorKOfDegradedDisk(sectorK);
+                write((degradedDiscIdx * diskSize) + sectorK, degradedDiscSectorKVal);
+            } else { //jesli to dysk koncowy
+                update_sum_k(sectorK, -1, -1, -1);
+            }
+        }
+
+        for (int val : disks.get(degradedDiscIdx).getSectors() ) {
+            System.out.print(val + "; ");
+        }
+        System.out.println();
+
+        matrixState = 2;
+        degradedDiscIdx = -1;
+    }
+
+    @Override
+    public void write(int sector, int value) {
+        // discSize = 50
+        // sector = 100
+
+        synchronized (disks.get(sector / diskSize)){
+            int diskIdx = sector / diskSize;
+            globalChangedDiskIdx = diskIdx;
+    //       przed shutdown() && gdy macierz jest zainicjalizowana
+    //       lub jest w czasie inicjalizaji i zapisujemy do ostatniego dysku
+            if(!shutdown && (matrixState > 1 || (matrixState == 1 && diskIdx == (disks.size() - 1))) ){
+
+                int discSector = sector % diskSize;
+                int degradedDiskSectorKVal = 0;
+
+                if (matrixState == 2) {
+                    globalChangedSectorKOldVal = read(sector);
+                    System.out.println("reading old val " + globalChangedSectorKOldVal);
+                }
+
+                if(matrixState > 2){
+        //           jeśli popsuty dysk nie jest ostanim, kontrolnym
+                    if (degradedDiscIdx != (disks.size() - 1)) {
+                        degradedDiskSectorKVal = findValueOfSectorKOfDegradedDisk(discSector);
+                    }
+                }
+
+                if (matrixState == 3 && degradedDiscIdx == diskIdx){
+                    degradedDiskSectorKVal = value;
+                } else {
+                    try {
+                        disks.get(diskIdx).write(discSector, value);
+                        newVals[sector] = val;
+//                        degradedDiskSectorKVal = value;
+                    } catch (DiskInterface.DiskError e) {
+                        if (matrixState == 2){ //tylko 1 moze nie dzialac na raz
+                            System.out.println("error writing to disk" + diskIdx);
+                            matrixState = 3;
+                            degradedDiscIdx = diskIdx;
+                            degradedDiskSectorKVal = value;
+                        } else {
+                            write(sector, value);
+                        }
+                    }
+                }
+
+                //jesli ostatni nie jest popsuty && jeśli właśnie nie zapisywaliśmy sumy
+                if(degradedDiscIdx != (disks.size() - 1) && diskIdx != (disks.size() - 1)){
+                    update_sum_k(discSector, diskIdx, degradedDiskSectorKVal, value);
+                }
+            }
+        }
+
+        System.out.println("writing finish");
+    }
+
+    @Override
+    public int read(int sector) {
+        System.out.println("reading " + sector);
+
+        synchronized (disks.get(sector / diskSize)){
+            if (!shutdown && matrixState > 0){
+
+                int diskIdx = sector / diskSize;
+                int discSector = sector % diskSize;
+
+                int val = 0;
+
+                if (matrixState > 2 && degradedDiscIdx == diskIdx){
+                    val = findValueOfSectorKOfDegradedDisk(discSector);
+                } else {
+                    try {
+                        val = disks.get(diskIdx).read(discSector);
+                    } catch (DiskInterface.DiskError e){
+                        if (matrixState == 2) { //tylko 1 moze nie dzialac na raz
+                            System.out.println("error reading from disk" + diskIdx);
+                            matrixState = 3;
+                            degradedDiscIdx = diskIdx;
+                            val = findValueOfSectorKOfDegradedDisk(discSector);
+                            System.out.println("val, globalChangedDiskIdx, globalChangedSectorKOldVal: " + val + " " + globalChangedDiskIdx + " " + globalChangedSectorKOldVal);
+                        } else {
+                            // ignorujemy ten error wiec jeszcze jedna próba odczytu, bo nie odczytamy tej wartości jak wyżej,
+                            // bo już nam jakiś 1 dysk nie działa
+                            val = read(sector);
+                        }
+                    }
+                }
+
+                System.out.println("reading finish");
+                return val;
+            }
+            System.out.println("reading finish");
+            return 0;
+        }
+
+    }
+
+    @Override
+    public int size() {
+        return diskSize * (disks.size() - 1);
+    }
+
+    @Override
+    public void shutdown() {
+        shutdown = true;
+    }
+}

@@ -1,3 +1,5 @@
+import java.util.concurrent.atomic.AtomicIntegerArray;
+
 /**
  * Interfejs obslugi dysku "fizycznego"
  * 
@@ -6,7 +8,7 @@
  */
 public interface DiskInterface {
 
-	int[] getSectors();
+	AtomicIntegerArray getSectors();
 
 	/**
 	 * Klasa wyjatek - informacja o trwalym uszkodzeniu dysku

@@ -1,13 +1,15 @@
 import java.util.ArrayList;
+import java.util.Arrays;
 
-public class RAID implements RAIDInterface {
+class RAID implements RAIDInterface {
     int matrixState = 0;
     int degradedDiscIdx = -1;
     int diskSize;
     boolean shutdown = false;
     ArrayList<DiskInterface> disks = new ArrayList<>();
-    int globalChangedDiskIdx = -1;
-    int globalChangedSectorKOldVal = 0;
+    ArrayList<Long> threadIdsOnSector;
+    ArrayList<Long> countingAllKByThread;
+    int[] oldVals;
 
     @Override
     public RAIDState getState() {
@@ -28,6 +30,10 @@ public class RAID implements RAIDInterface {
 
     @Override
     public void startRAID() {
+        oldVals = new int[size() + diskSize];
+        threadIdsOnSector = new ArrayList<>(Arrays.asList(new Long[size() + diskSize]));
+        countingAllKByThread = new ArrayList<>(Arrays.asList(new Long[diskSize]));
+
         if(!disks.isEmpty()){
             matrixState = 1;
             initialization();
@@ -38,75 +44,129 @@ public class RAID implements RAIDInterface {
         System.out.println("initializing");
 
         for (int sectorK = 0; sectorK < diskSize; sectorK++){
-            update_sum_k(sectorK, -1, 0, 0);
+            update_sum_k(sectorK, 0);
         }
-
-        for (int val : disks.get(disks.size()-1).getSectors() ) {
-            System.out.print(val + "; ");
-        }
-        System.out.println();
 
         matrixState = 2; //NORMAL
     }
 
-    private void update_sum_k(int k, int changedDiskIdx, int changedSectorKOldVal, int degradedDiscSectorKValue) {
-        System.out.println("update sum");
-        int sumK = 0;
+    private synchronized int[] findSectorKAllVals (int k, int newVal){
+        long threadId = Thread.currentThread().getId();
+
+        System.out.println("przypisalem " +  threadId + " do szukania wartosci k: " + k + " with new val = " + newVal);
+
+        int editedDiskIdx = -1; // nie istnieje
+        int editedSectorN = threadIdsOnSector.indexOf(threadId);
+        if (editedSectorN != -1){
+            editedDiskIdx = editedSectorN / diskSize; // istnieje
+        }
+        System.out.println("editedDiskIdx - " + editedDiskIdx);
+
+        int[] disksSectorKVal = new int[disks.size()];
+        boolean findDegradedDiskSectorKVal = false;
+
         for (int diskIdx = 0; diskIdx < disks.size() - 1; diskIdx++){
-//            diskIdx == globalChangedDiskIdx - na wypadek jak wywali blad przy odczytywaniu swiezo zmienionej wartosci,
-//            a przeciez wlasnie liczymy sume kontrolna wiec nie uda sie tego wyliczyc findem
-            if((matrixState == 3 && diskIdx == degradedDiscIdx) || diskIdx == globalChangedDiskIdx){
-                sumK += degradedDiscSectorKValue;
-            } else {
-                sumK += read((diskIdx*diskSize) + k);
+            int sectorN = (diskIdx*diskSize) + k;
+            System.out.println("\t\tth " +  threadId + " szukam k = " + k + " dla dysku = " + diskIdx);
+
+            if (diskIdx == editedDiskIdx) { //jesli to jest val z dysku wlasnie edytowanego
+                disksSectorKVal[diskIdx] = newVal; //moze to tez byc dysk zeputy do ktorego probowalismy zapisac
+            } else if (oldVals[sectorN] != -1 && threadIdsOnSector.get(sectorN) != null && editedDiskIdx != diskIdx){
+                //bierzemy starą, bo inaczej sie zakleczymy,
+                // ale nie z edited, bo tu dajemy nową
+                disksSectorKVal[diskIdx] = oldVals[sectorN];
+            } else if (diskIdx != degradedDiscIdx && diskIdx != editedDiskIdx ){
+//                jeśli dysk nie jest zepsuty i nie byl teraz nadpisany
+                int checkReadVal = read(sectorN);
+                if (checkReadVal == -1){
+                    findDegradedDiskSectorKVal = true; //to znaczy ze teraz nam sie wywalil dysk
+                } else {
+                    disksSectorKVal[diskIdx] = checkReadVal;
+                }
+            } else if (diskIdx == degradedDiscIdx && diskIdx != editedDiskIdx ) {
+                //jesli to nie jest dysk do ktorego terz zapisywalismy,
+                // ale jest zepsuty, to bedziemy szukac jego wartosci
+                findDegradedDiskSectorKVal = true;
             }
+            System.out.println("\t\tth " +  threadId + " znalazlem k = " + k + " dla dysku = " + diskIdx + " val = " + disksSectorKVal[diskIdx]);
+
         }
 
-        globalChangedDiskIdx = -1;
-        globalChangedSectorKOldVal = 0;
+        //        jeśli brakuje nam wartosci dysku zepsutego, to szukamy go na podstawie juz odczytanych
+        if(findDegradedDiskSectorKVal == true){
+            int degradedDiskSectorKVal = read(((disks.size() - 1)*diskSize) + k); //odczytanie sumy
+
+            for (int diskIdx = 0; diskIdx < disks.size() - 1; diskIdx++){
+                if (diskIdx != degradedDiscIdx){
+                    int sectorN = diskIdx*diskSize + k;
+                    if (oldVals[sectorN] != -1){ //jesli sektor K ma starą wartość
+                        degradedDiskSectorKVal -= oldVals[sectorN];
+                    } else { //jesli nie mamy starej wartości
+                        degradedDiskSectorKVal -= disksSectorKVal[diskIdx];
+                    }
+                }
+            }
+            disksSectorKVal[degradedDiscIdx] = degradedDiskSectorKVal;
+        }
+
+        return  disksSectorKVal;
+    }
+
+    private void update_sum_k(int k, int newVal) {
+        long threadId = Thread.currentThread().getId();
+        System.out.println("update sum by th - " + threadId);
+        int[] disksSectorKVal = findSectorKAllVals(k, newVal);
+        int sumK = Arrays.stream(disksSectorKVal).sum();
 
 //      zapisanie sumy kontrolnej
-        System.out.println("update sum write sum " + sumK);
+        System.out.println("th " + threadId + " update sum " + k +" write sum " + sumK);
         write(((disks.size() - 1)*diskSize) + k, sumK);
+
+        countingAllKByThread.set(k, null);
+
+        for (int diskIdx = 0; diskIdx < disks.size() - 1; diskIdx++){
+            if (diskIdx != degradedDiscIdx){
+                int sectorN = diskIdx*diskSize + k;
+                if (oldVals[sectorN] != -1){ //jesli sektor K ma starą wartość
+                    oldVals[sectorN] = -1; //zerujemy stare wartosci bo juz sa nieaktualne
+                }
+            }
+        }
     }
 
     // func. wywolywana tylko dla dyskow popsutych innych niz ostatni kontrolny
-    private int findValueOfKsectorOfDegradedDisk(int k, int changedDiskIdx, int ChangedSectorKOldVal ) {
-        int degradedDiscValSectorK = read(((disks.size() - 1)*diskSize) + k); //odczytanie sumy
+    private int findValueOfSectorKOfDegradedDisk(int k ) {
+        int[] disksSectorKVal = findSectorKAllVals(k, 0);
+        countingAllKByThread.set(k, null);
 
-        for (int diskIdx = 0; diskIdx < disks.size() - 1; diskIdx++){
-            if(diskIdx != degradedDiscIdx && diskIdx != changedDiskIdx){
-                degradedDiscValSectorK -= read((diskIdx*diskSize) + k);
-            } else if (diskIdx == changedDiskIdx){
-                degradedDiscValSectorK -= ChangedSectorKOldVal;
-            }
-        }
-        return degradedDiscValSectorK;
+        return disksSectorKVal[degradedDiscIdx];
     }
 
     @Override
     public void replaceDisk(DiskInterface disk) {
         System.out.println("replace disk degrIdx: " + degradedDiscIdx);
         disks.set(degradedDiscIdx, disk);
-        matrixState = 4; // rebuild
-        reconstructNewDisk();
+//        matrixState = 4; // rebuild
+//        reconstructNewDisk();
     }
 
     private void reconstructNewDisk() {
+        long threadId = Thread.currentThread().getId();
+        System.out.println("reconstructing by th - " + threadId);
+
         for (int sectorK = 0; sectorK < diskSize; sectorK++) {
-//            jesli to nie jest dysk koncowy
+//          jesli to nie jest dysk koncowy
+
+            int[] disksSectorKVal = findSectorKAllVals(sectorK, 0);
+
             if(degradedDiscIdx < disks.size() - 1){
-                int degradedDiscSectorKVal = findValueOfKsectorOfDegradedDisk(sectorK, -1, 0);
-                write((degradedDiscIdx * diskSize) + sectorK, degradedDiscSectorKVal);
+                System.out.println("\t\t\treconstructing disk: " + degradedDiscIdx + " sector k = " + sectorK + "with val = " + disksSectorKVal[degradedDiscIdx]);
+                write((degradedDiscIdx * diskSize) + sectorK, disksSectorKVal[degradedDiscIdx]);
             } else { //jesli to dysk koncowy
-                update_sum_k(sectorK, -1,0,0);
+                int sumK = Arrays.stream(disksSectorKVal).sum();
+                write((degradedDiscIdx * diskSize) + sectorK, sumK);
             }
         }
-
-        for (int val : disks.get(degradedDiscIdx).getSectors() ) {
-            System.out.print(val + "; ");
-        }
-        System.out.println();
 
         matrixState = 2;
         degradedDiscIdx = -1;
@@ -114,87 +174,107 @@ public class RAID implements RAIDInterface {
 
     @Override
     public void write(int sector, int value) {
-        // discSize = 50
-        // sector = 100
-
         int diskIdx = sector / diskSize;
-        globalChangedDiskIdx = diskIdx;
-//       przed shutdown() && gdy macierz jest zainicjalizowana
-//       lub jest w czasie inicjalizaji i zapisujemy do ostatniego dysku
-        if(!shutdown && (matrixState > 1 || (matrixState == 1 && diskIdx == (disks.size() - 1))) ){
+        int sectorK = sector % diskSize;
 
-            int discSector = sector % diskSize;
-            int degradedDiskSectorKVal = 0;
+//        ?? moze sie tak nie bd zakleszczać teraz?
+        if(diskIdx != degradedDiscIdx){
+            oldVals[sector] = read(sector);
+        }
 
-            if (matrixState == 2) {
-                globalChangedSectorKOldVal = read(sector);
-                System.out.println("reading old val " + globalChangedSectorKOldVal);
-            }
+        int newVal = 0; //do przekazania do obliczania sumy kontorlnej, bo po co to odczytywać zaraz po zapisaniu
+        synchronized (disks.get(diskIdx)){
+//            jesli dysk dziala, odczytaj starą wartość sektora
 
-            if(matrixState > 2){
-    //           jeśli popsuty dysk nie jest ostanim, kontrolnym
-                if (degradedDiscIdx != (disks.size() - 1)) {
-                    degradedDiskSectorKVal = findValueOfKsectorOfDegradedDisk(discSector, -1 ,0);
-                }
+            if (matrixState < 4 || diskIdx != degradedDiscIdx){
+                long threadId = Thread.currentThread().getId();
+                System.out.println("diskIdx - " + diskIdx);
+
+                threadIdsOnSector.set(sector, threadId);
             }
 
             if (matrixState == 3 && degradedDiscIdx == diskIdx){
-                degradedDiskSectorKVal = value;
+                //jeśli zapisujemy do dysku zepsutego,
+                // to przekażemy tę wartość do obliczania sumy kontrolnej
+                newVal = value;
             } else {
-                try {
-                    disks.get(diskIdx).write(discSector, value);
-                    degradedDiskSectorKVal = value;
-                } catch (DiskInterface.DiskError e) {
-                    if (matrixState == 2){ //tylko 1 moze nie dzialac na raz
-                        System.out.println("error writing to disk" + diskIdx);
-                        matrixState = 3;
-                        degradedDiscIdx = diskIdx;
-                        degradedDiskSectorKVal = value;
-                    } else {
-                        write(sector, value);
+                if (!shutdown && (matrixState > 1 || (matrixState == 1 && diskIdx == (disks.size() - 1)))){
+                    try {
+                        disks.get(diskIdx).write(sectorK, value);
+                        newVal = value; //bo nie uda sie nam odczytać tej wartości, bo blokujemy dostęp do tego dysku
+                    } catch (DiskInterface.DiskError e) {
+                        if (matrixState == 2){ //tylko 1 moze nie dzialac na raz
+                            System.out.println("error writing to disk" + diskIdx);
+                            matrixState = 3;
+                            degradedDiscIdx = diskIdx;
+                            newVal = value; // popsuty dysk, działamy tak jak w if-e wyzej
+                        } else {
+                            // jesli to juz ktorys popsuty dysk to próbujemy jeszcze raz bo ignorujemy ten błąd
+                            write(sector, value);
+                        }
                     }
+                } else {
+                    return;
                 }
             }
 
-            //jesli ostatni nie jest popsuty && jeśli właśnie nie zapisywaliśmy sumy
-            if(degradedDiscIdx != (disks.size() - 1) && diskIdx != (disks.size() - 1)){
-                update_sum_k(discSector, diskIdx, globalChangedSectorKOldVal, degradedDiskSectorKVal);
-            }
         }
+
+            // liczymy sumę kontrolną
+            //jesli ostatni nie jest popsuty && jeśli właśnie nie zapisywaliśmy sumy
+    //      i jesli to nie jest rekonstrukcja dysku
+            if(degradedDiscIdx != (disks.size() - 1) && diskIdx != (disks.size() - 1) && !(matrixState == 4 && diskIdx == degradedDiscIdx)){
+                update_sum_k(sectorK, newVal);
+            }
+            threadIdsOnSector.set(sector, null);
     }
 
     @Override
     public int read(int sector) {
-        if (!shutdown && matrixState > 0){
+        int diskIdx = sector / diskSize;
+        int sectorK = sector % diskSize;
 
-            int diskIdx = sector / diskSize;
-            int discSector = sector % diskSize;
-
+        synchronized (disks.get(diskIdx)){
             int val = 0;
 
             if (matrixState > 2 && degradedDiscIdx == diskIdx){
-                val = findValueOfKsectorOfDegradedDisk(discSector, -1, 0);
+                val = findValueOfSectorKOfDegradedDisk(sectorK);
             } else {
-                try {
-                    val = disks.get(diskIdx).read(discSector);
-                } catch (DiskInterface.DiskError e){
-                    if (matrixState == 2) { //tylko 1 moze nie dzialac na raz
-                        System.out.println("error reading from disk" + diskIdx);
-                        matrixState = 3;
-                        degradedDiscIdx = diskIdx;
-                        val = findValueOfKsectorOfDegradedDisk(discSector, globalChangedDiskIdx, globalChangedSectorKOldVal);
-                        System.out.println("val, globalChangedDiskIdx, globalChangedSectorKOldVal: " + val + " " + globalChangedDiskIdx + " " + globalChangedSectorKOldVal);
-                    } else {
-                        // ignorujemy ten error wiec jeszcze jedna próba odczytu, bo nie odczytamy tej wartości jak wyżej,
-                        // bo już nam jakiś 1 dysk nie działa
-                        val = read(sector);
+                if (!shutdown && matrixState > 0) {
+                    try {
+                        val = disks.get(diskIdx).read(sectorK);
+                    } catch (DiskInterface.DiskError e){
+                        if (matrixState == 2) { //tylko 1 moze nie dzialac na raz
+                            System.out.println("error reading from disk" + diskIdx);
+                            matrixState = 3;
+                            degradedDiscIdx = diskIdx;
+
+//                            jesli to sie wywaliło przy liczeniu sumy, to wtedy zwracamy cos zeby on wiedzial, zeby oznaczyc te wartosc do szukania
+//                            w innym wypadku wywołujemy find (po raz 1) -> val = find...
+//                            robimy tak zeby sie w findach nie zapętlić
+
+                            long threadId = Thread.currentThread().getId();
+                            int editedSectorN = threadIdsOnSector.indexOf(threadId);
+                            if (editedSectorN != -1){
+                                System.out.println("\tread val: " + (-1) );
+                                return -1;
+                            }
+
+                            val = findValueOfSectorKOfDegradedDisk(sectorK);
+                        } else {
+                            // ignorujemy ten error wiec jeszcze jedna próba odczytu, bo nie odczytamy tej wartości jak wyżej,
+                            // bo już nam jakiś 1 dysk nie działa
+                            val = read(sector);
+                        }
                     }
+                } else {
+                    return 0;
                 }
             }
 
+            System.out.println("\tread val: " + val );
             return val;
         }
-        return 0;
     }
 
     @Override

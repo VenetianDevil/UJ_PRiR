@@ -1,44 +1,50 @@
 import java.util.ArrayList;
 import java.util.Random;
+import java.util.concurrent.atomic.AtomicIntegerArray;
 
 public class Disk implements DiskInterface {
-    int[] diskSectors;
+    AtomicIntegerArray diskSectors = new AtomicIntegerArray(10);
+//    int[] diskSectors;
     int i = 0;
 
     public Disk(){
-        diskSectors = new Random().ints(5, 0, 50).toArray();
-        for (int val : diskSectors ) {
-            System.out.print(val + "; ");
+        for (int i = 0; i<diskSectors.length(); i++) {
+            diskSectors.set(i, 1);
         }
-        System.out.println();
+//        for (int val : diskSectors ) {
+//            System.out.print(val + "; ");
+//        }
+//        System.out.println();
     }
 
-    public int[] getSectors() {
+    public AtomicIntegerArray getSectors() {
         return diskSectors;
     }
 
     @Override
     public void write(int sector, int value) throws DiskError {
-//        System.out.println("i = " + i);
-        if (i++ % 5 == 0) {
-            throw new DiskError();
-        }
+        System.out.println("\td - writing " + value + " to sector " + sector);
+//        if (i++ % 5 == 0) {
+//            throw new DiskError();
+//        }
 
-        diskSectors[sector] = value;
+        diskSectors.set(sector, value);
     }
 
     @Override
     public int read(int sector) throws DiskError {
+//        System.out.println("\td - reading " + diskSectors[sector] +  " from sector " + sector);
+
         i++;
-//        System.out.println("i = " + i);
-        if (i == 15){
+        if (i == 11){
+            System.out.println("\td - throwing error");
             throw new DiskError();
         }
-        return diskSectors[sector];
+        return diskSectors.get(sector);
     }
 
     @Override
     public int size() {
-        return diskSectors.length;
+        return diskSectors.length();
     }
 }
