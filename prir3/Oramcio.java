@@ -4,7 +4,7 @@ import java.util.List;
 public class Oramcio implements PolygonalChainProcessor {
     @Override
     public int getConcurrentTasksLimit() throws RemoteException {
-        return 1;
+        return 2;
     }
 
     @Override

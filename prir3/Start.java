@@ -33,9 +33,12 @@ class MyService implements PolygonalChain {
     @Override
 //synchronized? czy wtedy nie pojawi sie problem ze mozemy probować juz dodać linie do krzywej, jak jeszcze jej nie zapisaliśmy
     public synchronized void newPolygonalChain(String name, Position2D firstPoint, Position2D lastPoint) throws RemoteException {
+        if (chains.stream().anyMatch(c -> c.name.equals(name))){
+            throw new RemoteException();
+        }
         Chain chain = new Chain(name, firstPoint, lastPoint);
         chains.add(chain);
-        System.out.println("i have chains: " + chains.size());
+//        System.out.println("i have chains: " + chains.size());
     }
 
     @Override
@@ -48,12 +51,15 @@ class MyService implements PolygonalChain {
                 }
                 synchronized (chains.get(chainIdx)){
                     if (chain.isChainComplete() && !chain.processed) {
-                        System.out.println(chain.name + " ready to process ");
-                        try {
-                            sendToProcess(chain);
-                        } catch (InterruptedException e) {
-                            e.printStackTrace();
-                        }
+//                        System.out.println(chain.name + " ready to process ");
+                        Thread thread = new Thread(() -> {
+                            try {
+                                sendToProcess(chain);
+                            } catch (InterruptedException e) {
+                                e.printStackTrace();
+                            }
+                        });
+                        thread.start();
                     }
                 }
                 return;
@@ -68,23 +74,17 @@ class MyService implements PolygonalChain {
             for (Lock lock: locks) {
                 if(lock.tryLock()){
                     try {
-                        Thread t = new Thread(() -> {
-                            List<Position2D> polygonalChain = chain.getPolygonalChain();
-                            try {
-                                System.out.println("\t\t" + chain.name + " inside process");
-                                chain.result = polygonalChainProcessor.process(chain.name, polygonalChain);
-                                chain.processed = true;
-                            } catch (RemoteException e) {
+                        List<Position2D> polygonalChain = chain.getPolygonalChain();
+//                        System.out.println("\t\t" + chain.name + " inside process");
+                        chain.result = polygonalChainProcessor.process(chain.name, polygonalChain);
+                        chain.processed = true;
+                    }
+                    catch (RemoteException e) {
                                 e.printStackTrace();
-                            }
-                        });
-
-                        t.start();
-                        t.join();
-
                     } finally {
-                        System.out.println("\t\t\t\t" + chain.name + " finished process");
+//                        System.out.println("\t\t\t\t" + chain.name + " finished process");
                         lock.unlock();
+//                        System.out.println("unlock " + chain.name);
                     }
                     return;
                 }
@@ -98,7 +98,7 @@ class MyService implements PolygonalChain {
             if (chain.name.equals(name)){
                 int chainIdx = chains.indexOf(chain);
                 synchronized (chains.get(chainIdx)){
-                    System.out.println(chain.name + " " + chain.processed + " get result: " + chain.result );
+//                    System.out.println(chain.name + " " + chain.processed + " get result: " + chain.result );
                     if (chain.processed) {
                         return chain.result;
                     }
@@ -164,12 +164,7 @@ class Chain {
 
     public void addLine(Line line){
         lines.add(line);
-        System.out.println("line added to " + name);
-//        try {
-//            Thread.sleep(3000);
-//        } catch (InterruptedException e) {
-//            e.printStackTrace();
-//        }
+//        System.out.println("line added to " + name);
     }
 
     public boolean isChainComplete() {
