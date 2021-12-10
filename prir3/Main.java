@@ -1,26 +1,22 @@
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.rmi.NotBoundException;
 import java.rmi.RemoteException;
 import java.rmi.registry.LocateRegistry;
 import java.rmi.registry.Registry;
 import java.rmi.server.UnicastRemoteObject;
-import java.util.ArrayList;
-import java.util.concurrent.Executors;
 
 public class Main {
 
     public static void main(String[] argv) throws InterruptedException {
-       Start start = new Start();
-       PolygonalChain service;
-
         try {
-            Registry registry = java.rmi.registry.LocateRegistry.getRegistry("localhost", 1099);
+            Registry registry = java.rmi.registry.LocateRegistry.createRegistry(1099);
             PolygonalChainProcessor s = (PolygonalChainProcessor) UnicastRemoteObject.exportObject(new Oramcio(), 0);
             registry.rebind("ORAMCIO", s);
         } catch (RemoteException e) {
             e.printStackTrace();
         }
+
+       Start start = new Start();
+       PolygonalChain service;
 
         try {
             Registry registry = LocateRegistry.getRegistry(1099);

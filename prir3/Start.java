@@ -10,10 +10,9 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 public class Start {
-
     public Start() {
         try {
-            Registry registry = java.rmi.registry.LocateRegistry.createRegistry(1099);
+            Registry registry = java.rmi.registry.LocateRegistry.getRegistry(1099);
             PolygonalChain s = (PolygonalChain) UnicastRemoteObject.exportObject(new MyService(), 0);
             registry.rebind("POLYGONAL_CHAIN", s);
         } catch (RemoteException  e) {
