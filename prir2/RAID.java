@@ -34,14 +34,22 @@ class RAID implements RAIDInterface {
         threadIdsOnSector = new ArrayList<>(Arrays.asList(new Long[size() + diskSize]));
         countingAllKByThread = new ArrayList<>(Arrays.asList(new Long[diskSize]));
 
+        matrixState = 1;
+
         if(!disks.isEmpty()){
-            matrixState = 1;
-            initialization();
+            Thread t = new Thread(){
+                @Override
+                public void run() {
+                    initialization();
+                }
+            };
+
+            t.start();
         }
     }
 
     private void initialization() {
-        System.out.println("initializing");
+        // System.out.println("initializing");
 
         for (int sectorK = 0; sectorK < diskSize; sectorK++){
             update_sum_k(sectorK, 0);
@@ -53,21 +61,21 @@ class RAID implements RAIDInterface {
     private synchronized int[] findSectorKAllVals (int k, int newVal){
         long threadId = Thread.currentThread().getId();
 
-        System.out.println("przypisalem " +  threadId + " do szukania wartosci k: " + k + " with new val = " + newVal);
+        // System.out.println("przypisalem " +  threadId + " do szukania wartosci k: " + k + " with new val = " + newVal);
 
         int editedDiskIdx = -1; // nie istnieje
         int editedSectorN = threadIdsOnSector.indexOf(threadId);
         if (editedSectorN != -1){
             editedDiskIdx = editedSectorN / diskSize; // istnieje
         }
-        System.out.println("editedDiskIdx - " + editedDiskIdx);
+        // System.out.println("editedDiskIdx - " + editedDiskIdx);
 
         int[] disksSectorKVal = new int[disks.size()];
         boolean findDegradedDiskSectorKVal = false;
 
         for (int diskIdx = 0; diskIdx < disks.size() - 1; diskIdx++){
             int sectorN = (diskIdx*diskSize) + k;
-            System.out.println("\t\tth " +  threadId + " szukam k = " + k + " dla dysku = " + diskIdx);
+            // System.out.println("\t\tth " +  threadId + " szukam k = " + k + " dla dysku = " + diskIdx);
 
             if (diskIdx == editedDiskIdx) { //jesli to jest val z dysku wlasnie edytowanego
                 disksSectorKVal[diskIdx] = newVal; //moze to tez byc dysk zeputy do ktorego probowalismy zapisac
@@ -88,7 +96,7 @@ class RAID implements RAIDInterface {
                 // ale jest zepsuty, to bedziemy szukac jego wartosci
                 findDegradedDiskSectorKVal = true;
             }
-            System.out.println("\t\tth " +  threadId + " znalazlem k = " + k + " dla dysku = " + diskIdx + " val = " + disksSectorKVal[diskIdx]);
+            // System.out.println("\t\tth " +  threadId + " znalazlem k = " + k + " dla dysku = " + diskIdx + " val = " + disksSectorKVal[diskIdx]);
 
         }
 
@@ -114,12 +122,12 @@ class RAID implements RAIDInterface {
 
     private void update_sum_k(int k, int newVal) {
         long threadId = Thread.currentThread().getId();
-        System.out.println("update sum by th - " + threadId);
+        // System.out.println("update sum by th - " + threadId);
         int[] disksSectorKVal = findSectorKAllVals(k, newVal);
         int sumK = Arrays.stream(disksSectorKVal).sum();
 
 //      zapisanie sumy kontrolnej
-        System.out.println("th " + threadId + " update sum " + k +" write sum " + sumK);
+        // System.out.println("th " + threadId + " update sum " + k +" write sum " + sumK);
         write(((disks.size() - 1)*diskSize) + k, sumK);
 
         countingAllKByThread.set(k, null);
@@ -144,15 +152,15 @@ class RAID implements RAIDInterface {
 
     @Override
     public void replaceDisk(DiskInterface disk) {
-        System.out.println("replace disk degrIdx: " + degradedDiscIdx);
+        // System.out.println("replace disk degrIdx: " + degradedDiscIdx);
         disks.set(degradedDiscIdx, disk);
-//        matrixState = 4; // rebuild
-//        reconstructNewDisk();
+        matrixState = 4; // rebuild
+        reconstructNewDisk();
     }
 
     private void reconstructNewDisk() {
         long threadId = Thread.currentThread().getId();
-        System.out.println("reconstructing by th - " + threadId);
+        // System.out.println("reconstructing by th - " + threadId);
 
         for (int sectorK = 0; sectorK < diskSize; sectorK++) {
 //          jesli to nie jest dysk koncowy
@@ -160,7 +168,7 @@ class RAID implements RAIDInterface {
             int[] disksSectorKVal = findSectorKAllVals(sectorK, 0);
 
             if(degradedDiscIdx < disks.size() - 1){
-                System.out.println("\t\t\treconstructing disk: " + degradedDiscIdx + " sector k = " + sectorK + "with val = " + disksSectorKVal[degradedDiscIdx]);
+                // System.out.println("\t\t\treconstructing disk: " + degradedDiscIdx + " sector k = " + sectorK + "with val = " + disksSectorKVal[degradedDiscIdx]);
                 write((degradedDiscIdx * diskSize) + sectorK, disksSectorKVal[degradedDiscIdx]);
             } else { //jesli to dysk koncowy
                 int sumK = Arrays.stream(disksSectorKVal).sum();
@@ -188,7 +196,7 @@ class RAID implements RAIDInterface {
 
             if (matrixState < 4 || diskIdx != degradedDiscIdx){
                 long threadId = Thread.currentThread().getId();
-                System.out.println("diskIdx - " + diskIdx);
+                // System.out.println("diskIdx - " + diskIdx);
 
                 threadIdsOnSector.set(sector, threadId);
             }
@@ -204,7 +212,7 @@ class RAID implements RAIDInterface {
                         newVal = value; //bo nie uda sie nam odczytać tej wartości, bo blokujemy dostęp do tego dysku
                     } catch (DiskInterface.DiskError e) {
                         if (matrixState == 2){ //tylko 1 moze nie dzialac na raz
-                            System.out.println("error writing to disk" + diskIdx);
+                            // System.out.println("error writing to disk" + diskIdx);
                             matrixState = 3;
                             degradedDiscIdx = diskIdx;
                             newVal = value; // popsuty dysk, działamy tak jak w if-e wyzej
@@ -245,7 +253,7 @@ class RAID implements RAIDInterface {
                         val = disks.get(diskIdx).read(sectorK);
                     } catch (DiskInterface.DiskError e){
                         if (matrixState == 2) { //tylko 1 moze nie dzialac na raz
-                            System.out.println("error reading from disk" + diskIdx);
+                            // System.out.println("error reading from disk" + diskIdx);
                             matrixState = 3;
                             degradedDiscIdx = diskIdx;
 
@@ -256,7 +264,7 @@ class RAID implements RAIDInterface {
                             long threadId = Thread.currentThread().getId();
                             int editedSectorN = threadIdsOnSector.indexOf(threadId);
                             if (editedSectorN != -1){
-                                System.out.println("\tread val: " + (-1) );
+                                // System.out.println("\tread val: " + (-1) );
                                 return -1;
                             }
 
@@ -272,7 +280,7 @@ class RAID implements RAIDInterface {
                 }
             }
 
-            System.out.println("\tread val: " + val );
+            // System.out.println("\tread val: " + val );
             return val;
         }
     }
