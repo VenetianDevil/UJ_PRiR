@@ -58,16 +58,6 @@ int main(int argc, char **argv) {
 	int *stat;
   int k=0;
 
-  // clock_t start;
-  // double duration;
-  // start = std::clock(); // get current time
-
-  // #pragma omp parallel
-  // {
-  //   #pragma omp single
-  //   threadsNum = omp_get_num_threads();
-  // }
-
 	while (k<3) {
 		l->oneStep();
     cout << "avgNumerOfLiveNeighboursOfLiveCell: " << l->avgNumerOfLiveNeighboursOfLiveCell() << endl;
@@ -76,8 +66,6 @@ int main(int argc, char **argv) {
     cout << "maxSumOfNeighboursAge: " << max << endl;
 
 		stat = l->numberOfNeighboursStatistics();
-	  for ( int i = 0; i < 9; i++ )
-		  cout << "stat " << i << " = " << stat[ i ] << endl;
     
     // showTable(l->getCurrentState(), SIZE);
 		// showVector( stat, 9 );
@@ -85,8 +73,6 @@ int main(int argc, char **argv) {
 		// usleep(250000);
     k++;
 	}
-
-  // cout << "time: " << ( clock() - start ) / (double) CLOCKS_PER_SEC << endl;
 
 	return 0;
 }
